@@ -40,6 +40,7 @@ def main():
         return
 
     # 分離對照圖片和場景圖片
+    # 除了 REFERENCE_IMAGE 以外，資料夾中的其他圖片都視為場景圖片
     reference_image_path = None
     scene_images = []
 
@@ -61,10 +62,15 @@ def main():
     elif REFERENCE_IMAGE:
         print(f"\n提醒：找不到對照清單圖片 '{REFERENCE_IMAGE}'，將只做盤點不做比對。")
 
-    # 如果場景圖片不是 4 張，印出提醒（但不中斷程式）
-    if len(scene_images) != 4:
-        print(f"\n提醒：預期 4 張場景圖片，但找到 {len(scene_images)} 張。")
+    # 場景圖片數量檢查（只印出提醒，不中斷程式）
+    if len(scene_images) == 0:
+        print("錯誤：沒有找到任何場景圖片，無法進行盤點。")
+        return
+    elif len(scene_images) < 2:
+        print(f"\n提醒：目前只有 {len(scene_images)} 張場景圖片，建議至少 2 張以上才能互相補足角度。")
         print("程式會繼續執行，但盤點結果可能不完整。\n")
+    else:
+        print(f"\n場景圖片共 {len(scene_images)} 張，程式繼續執行。\n")
 
     # --- 步驟 4：呼叫 ChatGPT API ---
     try:

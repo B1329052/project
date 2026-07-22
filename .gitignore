@@ -6,3 +6,4 @@ pictures/
 compressed_images/
 
 inventory_result.json
+.venv/

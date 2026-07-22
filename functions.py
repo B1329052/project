@@ -104,10 +104,32 @@ def encode_image(image_path):
     return base64_string
 
 
+def build_position_info(scene_images, reference_image_path):
+    """
+    根據場景圖片和對照圖片，自動產生拍攝位置說明文字。
+    不寫死圖片數量，根據實際場景圖片動態產生。
+    """
+    num_scenes = len(scene_images)
+    position_info = f"\n以下是 {num_scenes} 張場景圖片的拍攝位置：\n"
+
+    for i, image_path in enumerate(scene_images):
+        filename = os.path.basename(image_path)
+        # 如果有設定攝影機位置就用，沒有就標記「未設定」
+        position = camera_positions.get(filename, "未設定拍攝位置")
+        position_info += f"- 場景圖片 {i + 1}（{filename}）：{position}\n"
+
+    # 如果有對照圖片，加入說明
+    if reference_image_path:
+        ref_filename = os.path.basename(reference_image_path)
+        position_info += f"\n- 對照清單圖片（{ref_filename}）：這是物品的對照清單/參考表，請用來比對盤點結果\n"
+
+    return position_info
+
+
 def call_chatgpt(scene_images, reference_image_path):
     """
     把場景圖片、對照圖片和提示詞一起送給 ChatGPT API
-    scene_images: 場景圖片路徑列表
+    scene_images: 場景圖片路徑列表（數量不固定）
     reference_image_path: 對照清單圖片路徑（可以是 None）
     回傳：ChatGPT 回傳的文字內容
     """
@@ -134,18 +156,8 @@ def call_chatgpt(scene_images, reference_image_path):
 
     # --- 組合提示詞 ---
 
-    # 先加入攝影機位置說明（使用原始檔名來查 camera_positions）
-    position_info = "\n以下是每張場景圖片的拍攝位置：\n"
-    for i, image_path in enumerate(scene_images):
-        filename = os.path.basename(image_path)
-        # 如果有設定攝影機位置就用，沒有就標記「未設定」
-        position = camera_positions.get(filename, "未設定拍攝位置")
-        position_info += f"- 場景圖片 {i + 1}（{filename}）：{position}\n"
-
-    # 如果有對照圖片，加入說明
-    if compressed_ref_path:
-        ref_filename = os.path.basename(reference_image_path)
-        position_info += f"\n- 對照清單圖片（{ref_filename}）：這是物品的對照清單/參考表，請用來比對盤點結果\n"
+    # 自動產生拍攝位置說明（根據實際場景圖片數量）
+    position_info = build_position_info(scene_images, reference_image_path)
 
     # 完整提示詞 = 攝影機位置 + 主要提示詞
     full_prompt = position_info + "\n" + PROMPT_TEXT
@@ -220,44 +232,88 @@ def save_json(data, filename="inventory_result.json"):
 
 def print_table(inventory_data):
     """
-    用簡單的表格格式印出盤點結果（含對照比對）
+    用簡單的表格格式印出盤點結果（含遮擋分析、漏算位置、補拍建議）
     """
+    # --- 1. 盤點結果表格 ---
     items = inventory_data.get("inventory", [])
 
     if not items:
         print("沒有辨識到任何物品。")
-        return
+    else:
+        print("\n" + "=" * 90)
+        print("【盤點結果】")
+        print("-" * 90)
+        print(f"{'物品種類':<12} | {'辨識數量':<8} | {'AI備註'}")
+        print("-" * 90)
 
-    # 表格標題
-    print("\n" + "=" * 100)
-    print(f"{'物品種類':<12} | {'盤點數量':<8} | {'清單數量':<8} | {'比對結果':<10} | {'AI備註'}")
-    print("-" * 100)
-
-    # 印出每個物品
-    for item in items:
-        name = item.get("物品種類", "未知")
-        count = item.get("辨識出的物品數量", "?")
-        ref_count = item.get("對照清單數量", "-")
-        compare = item.get("比對結果", "-")
-        note = item.get("AI備註", "")
-        print(f"{name:<12} | {str(count):<8} | {str(ref_count):<8} | {compare:<10} | {note}")
-
-    print("=" * 100)
-
-    # 印出「清單上有但場景中沒看到」的物品
-    missing = inventory_data.get("missing_from_scene", [])
-    if missing:
-        print("\n--- 清單上有但場景中未找到的物品 ---")
-        print(f"{'物品種類':<12} | {'清單數量':<8} | {'AI備註'}")
-        print("-" * 60)
-        for item in missing:
+        for item in items:
             name = item.get("物品種類", "未知")
-            ref_count = item.get("對照清單數量", "?")
+            count = item.get("辨識出的物品數量", "?")
             note = item.get("AI備註", "")
-            print(f"{name:<12} | {str(ref_count):<8} | {note}")
-        print("-" * 60)
+            print(f"{name:<12} | {str(count):<8} | {note}")
 
-    # 印出整體備註
+        print("=" * 90)
+
+    # --- 2. 遮擋分析表格 ---
+    occlusion = inventory_data.get("occlusion_analysis", [])
+
+    if occlusion:
+        print("\n" + "=" * 90)
+        print("【遮擋分析】")
+        print("-" * 90)
+        print(f"{'位置或照片':<20} | {'遮擋情況':<25} | {'可能影響'}")
+        print("-" * 90)
+
+        for item in occlusion:
+            location = item.get("位置或照片", "未知")
+            situation = item.get("遮擋情況", "")
+            impact = item.get("可能影響", "")
+            print(f"{location:<20} | {situation:<25} | {impact}")
+
+        print("=" * 90)
+
+    # --- 3. 可能漏算位置表格 ---
+    missing_areas = inventory_data.get("possible_missing_areas", [])
+
+    if missing_areas:
+        print("\n" + "=" * 90)
+        print("【可能漏算位置】")
+        print("-" * 90)
+        print(f"{'漏算位置':<15} | {'受影響物品':<12} | {'原因':<20} | {'不確定程度'}")
+        print("-" * 90)
+
+        for item in missing_areas:
+            location = item.get("可能漏算的位置", "未知")
+            affected = item.get("受影響的物品種類", "")
+            reason = item.get("原因", "")
+            uncertainty = item.get("不確定程度", "")
+            print(f"{location:<15} | {affected:<12} | {reason:<20} | {uncertainty}")
+
+        print("=" * 90)
+
+    # --- 4. 是否建議補拍 ---
+    more_photos = inventory_data.get("need_more_photos", {})
+
+    if more_photos:
+        print("\n" + "=" * 90)
+        print("【是否建議補拍】")
+        print("-" * 90)
+
+        suggest = more_photos.get("建議補拍", False)
+        reason = more_photos.get("原因", "")
+        angles = more_photos.get("建議補拍角度", [])
+        focus = more_photos.get("補拍重點", "")
+
+        print(f"  建議補拍：{'是' if suggest else '否'}")
+        print(f"  原因：{reason}")
+        if angles:
+            print(f"  建議補拍角度：{', '.join(angles) if isinstance(angles, list) else angles}")
+        if focus:
+            print(f"  補拍重點：{focus}")
+
+        print("=" * 90)
+
+    # --- 5. 整體備註 ---
     overall = inventory_data.get("overall_note", "")
     if overall:
         print(f"\n整體備註：{overall}")
