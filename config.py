@@ -23,6 +23,9 @@ REFERENCE_IMAGE_NAME = "reference.jpg"
 # 結果輸出資料夾
 RESULT_FOLDER = "results"
 
+# 最多允許補拍重新盤點幾次，避免程式無限重跑
+MAX_RESUPPLY_ROUNDS = 3
+
 # 盤點提示詞（你可以直接修改這段文字）
 # 注意：不要在這裡寫死圖片數量或檔名，程式會自動產生圖片說明
 PROMPT_TEXT = """
