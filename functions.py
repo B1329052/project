@@ -14,10 +14,11 @@ from config import (
     BASE_URL,
     MODEL_NAME,
     PROMPT_TEXT,
-    camera_positions,
+    REFERENCE_IMAGE_NAME,
+    RESULT_FOLDER,
 )
 
-
+# 把符合格式的圖片路徑存進 image_files，最後排序後回傳
 def get_image_files(folder_path):
     """
     讀取資料夾中所有支援的圖片檔案（.jpg, .jpeg, .png）
@@ -39,7 +40,23 @@ def get_image_files(folder_path):
 
     return image_files
 
+def get_group_folders(root_folder):
+    """
+    讀取 pictures 底下所有 group 資料夾。
+    每個子資料夾代表一組場景。
+    """
+    group_folders = []
 
+    for name in os.listdir(root_folder):
+        full_path = os.path.join(root_folder, name)
+
+        if os.path.isdir(full_path):
+            group_folders.append(full_path)
+
+    group_folders.sort()
+    return group_folders
+
+# 影像前處理
 def compress_images(image_files, output_folder="compressed_images"):
     """
     將圖片清單中的每張圖片縮小尺寸並增加對比度後存到指定資料夾
@@ -92,7 +109,7 @@ def compress_images(image_files, output_folder="compressed_images"):
 
     return compressed_paths
 
-
+# 把圖片轉成 base64 字串
 def encode_image(image_path):
     """
     將圖片檔案讀取並轉成 base64 字串
@@ -103,30 +120,42 @@ def encode_image(image_path):
     base64_string = base64.b64encode(image_data).decode("utf-8")
     return base64_string
 
+def get_mime_type(image_path):
+    """
+    根據副檔名判斷圖片格式，給 API 使用。
+    """
+    ext = os.path.splitext(image_path)[1].lower()
 
-def build_position_info(scene_images, reference_image_path):
+    if ext == ".png":
+        return "image/png"
+    elif ext == ".jpg" or ext == ".jpeg":
+        return "image/jpeg"
+    else:
+        return "image/jpeg"
+
+def build_image_info(scene_images, reference_image_path, group_name):
     """
-    根據場景圖片和對照圖片，自動產生拍攝位置說明文字。
-    不寫死圖片數量，根據實際場景圖片動態產生。
+    產生圖片說明文字。
+    這階段不手動設定拍攝角度，只列出 group 名稱與圖片檔名。
     """
-    num_scenes = len(scene_images)
-    position_info = f"\n以下是 {num_scenes} 張場景圖片的拍攝位置：\n"
+    info = f"\n目前處理的場景資料夾：{group_name}\n"
+
+    if reference_image_path:
+        ref_filename = os.path.basename(reference_image_path)
+        info += f"\n參照圖片：{ref_filename}\n"
+
+    info += f"\n場景圖片共有 {len(scene_images)} 張：\n"
 
     for i, image_path in enumerate(scene_images):
         filename = os.path.basename(image_path)
-        # 如果有設定攝影機位置就用，沒有就標記「未設定」
-        position = camera_positions.get(filename, "未設定拍攝位置")
-        position_info += f"- 場景圖片 {i + 1}（{filename}）：{position}\n"
+        info += f"- 場景圖片 {i + 1}：{filename}\n"
 
-    # 如果有對照圖片，加入說明
-    if reference_image_path:
-        ref_filename = os.path.basename(reference_image_path)
-        position_info += f"\n- 對照清單圖片（{ref_filename}）：這是物品的對照清單/參考表，請用來比對盤點結果\n"
+    info += "\n請注意：場景圖片檔名可以任意，這些圖片都屬於同一個場景。\n"
 
-    return position_info
+    return info
 
-
-def call_chatgpt(scene_images, reference_image_path):
+# API 呼叫 ChatGPT
+def call_chatgpt(scene_images, reference_image_path, group_name):
     """
     把場景圖片、對照圖片和提示詞一起送給 ChatGPT API
     scene_images: 場景圖片路徑列表（數量不固定）
@@ -134,11 +163,20 @@ def call_chatgpt(scene_images, reference_image_path):
     回傳：ChatGPT 回傳的文字內容
     """
     # 建立 OpenAI 客戶端
-    client = OpenAI(api_key=OPENAI_API_KEY, base_url=BASE_URL)
+    if BASE_URL:
+        client = OpenAI(
+            api_key=OPENAI_API_KEY,
+            base_url=BASE_URL
+    )
+    else:
+        client = OpenAI(
+            api_key=OPENAI_API_KEY
+        )
 
     # --- 步驟 A：壓縮所有圖片 ---
     print("\n正在壓縮場景圖片...")
-    compressed_scene = compress_images(scene_images)
+    compressed_output_folder = os.path.join("compressed_images", group_name)
+    compressed_scene = compress_images(scene_images, compressed_output_folder)
 
     # 檢查是否有壓縮成功的場景圖片
     if len(compressed_scene) == 0:
@@ -148,7 +186,7 @@ def call_chatgpt(scene_images, reference_image_path):
     compressed_ref_path = None
     if reference_image_path:
         print("\n正在壓縮對照清單圖片...")
-        compressed_ref_list = compress_images([reference_image_path])
+        compressed_ref_list = compress_images([reference_image_path], compressed_output_folder)
         if len(compressed_ref_list) > 0:
             compressed_ref_path = compressed_ref_list[0]
         else:
@@ -156,11 +194,8 @@ def call_chatgpt(scene_images, reference_image_path):
 
     # --- 組合提示詞 ---
 
-    # 自動產生拍攝位置說明（根據實際場景圖片數量）
-    position_info = build_position_info(scene_images, reference_image_path)
-
-    # 完整提示詞 = 攝影機位置 + 主要提示詞
-    full_prompt = position_info + "\n" + PROMPT_TEXT
+    image_info = build_image_info(scene_images, reference_image_path, group_name)
+    full_prompt = image_info + "\n" + PROMPT_TEXT
 
     # --- 組合訊息內容（文字 + 多張壓縮圖片）---
 
@@ -174,17 +209,22 @@ def call_chatgpt(scene_images, reference_image_path):
     })
 
     # 接下來：每張壓縮後的場景圖片轉成 base64 後加入
-    for compressed_path in compressed_scene:
-        filename = os.path.basename(compressed_path)
-        print(f"  正在編碼壓縮後場景圖片：{filename}")
+    if compressed_ref_path:
+        ref_filename = os.path.basename(compressed_ref_path)
+        print(f"  正在編碼壓縮後參照圖片：{ref_filename}")
 
-        base64_str = encode_image(compressed_path)
+        content_list.append({
+            "type": "text",
+            "text": f"接下來這張是參照圖片：{ref_filename}"
+        })
 
-        # 壓縮後都是 JPEG 格式
+        base64_str = encode_image(compressed_ref_path)
+        mime_type = get_mime_type(compressed_ref_path)
+
         content_list.append({
             "type": "image_url",
             "image_url": {
-                "url": f"data:image/jpeg;base64,{base64_str}",
+                "url": f"data:{mime_type};base64,{base64_str}",
             },
         })
 
@@ -220,6 +260,22 @@ def call_chatgpt(scene_images, reference_image_path):
     result_text = response.choices[0].message.content
     return result_text
 
+def clean_json_text(result_text):
+    """
+    清理 GPT 回傳內容外面的 ```json 包裝。
+    """
+    clean_text = result_text.strip()
+
+    if clean_text.startswith("```json"):
+        clean_text = clean_text[7:]
+
+    if clean_text.startswith("```"):
+        clean_text = clean_text[3:]
+
+    if clean_text.endswith("```"):
+        clean_text = clean_text[:-3]
+
+    return clean_text.strip()
 
 def save_json(data, filename="inventory_result.json"):
     """
@@ -229,6 +285,81 @@ def save_json(data, filename="inventory_result.json"):
         json.dump(data, f, ensure_ascii=False, indent=2)
     print(f"結果已儲存到：{filename}")
 
+def process_one_group(group_folder):
+    """
+    處理單一 group 資料夾。
+    每個 group 代表一個場景。
+    每個 group 裡面都有自己的 reference.jpg。
+    """
+    group_name = os.path.basename(group_folder)
+
+    print("\n" + "=" * 60)
+    print(f"開始處理：{group_name}")
+    print("=" * 60)
+
+    # --- 找出這一組自己的參照圖片 ---
+    reference_image_path = os.path.join(group_folder, REFERENCE_IMAGE_NAME)
+
+    if not os.path.isfile(reference_image_path):
+        print(f"錯誤：{group_name} 找不到參照圖片：{REFERENCE_IMAGE_NAME}")
+        print("請確認每個 group 資料夾中都有 reference.jpg")
+        return
+
+    print(f"找到參照圖片：{REFERENCE_IMAGE_NAME}")
+
+    # --- 讀取這個 group 裡的所有圖片 ---
+    all_images = get_image_files(group_folder)
+
+    # --- 把 reference.jpg 排除，剩下的都是場景圖片 ---
+    scene_images = []
+
+    for img in all_images:
+        filename = os.path.basename(img)
+
+        if filename != REFERENCE_IMAGE_NAME:
+            scene_images.append(img)
+
+    if len(scene_images) == 0:
+        print(f"提醒：{group_name} 裡沒有找到場景圖片，跳過此組。")
+        return
+
+    print(f"找到 {len(scene_images)} 張場景圖片：")
+    for img in scene_images:
+        print(f"  - {os.path.basename(img)}")
+
+    # --- 呼叫 GPT ---
+    result_text = call_chatgpt(scene_images, reference_image_path, group_name)
+
+    print("ChatGPT 回傳的原始結果：")
+    print("-" * 50)
+    print(result_text)
+    print("-" * 50)
+
+    # --- 解析 JSON ---
+    clean_text = clean_json_text(result_text)
+
+    try:
+        result_json = json.loads(clean_text)
+        print("\nJSON 解析成功！")
+    except json.JSONDecodeError as e:
+        print(f"\n警告：{group_name} 回傳內容不是合法 JSON：{e}")
+        print("請檢查上方原始回傳內容。")
+        return
+
+    # --- 建立 results 資料夾 ---
+    if not os.path.exists(RESULT_FOLDER):
+        os.makedirs(RESULT_FOLDER)
+
+    # --- 每組輸出不同檔名 ---
+    output_filename = f"inventory_result_{group_name}.json"
+    output_path = os.path.join(RESULT_FOLDER, output_filename)
+
+    save_json(result_json, output_path)
+
+    # --- 印出表格 ---
+    print_table(result_json)
+
+    print(f"\n{group_name} 處理完成！")
 
 def print_table(inventory_data):
     """
@@ -241,7 +372,7 @@ def print_table(inventory_data):
         print("沒有辨識到任何物品。")
     else:
         print("\n" + "=" * 90)
-        print("【盤點結果】")
+        print("盤點結果")
         print("-" * 90)
         print(f"{'物品種類':<12} | {'辨識數量':<8} | {'AI備註'}")
         print("-" * 90)
@@ -259,7 +390,7 @@ def print_table(inventory_data):
 
     if occlusion:
         print("\n" + "=" * 90)
-        print("【遮擋分析】")
+        print("遮擋分析")
         print("-" * 90)
         print(f"{'位置或照片':<20} | {'遮擋情況':<25} | {'可能影響'}")
         print("-" * 90)
@@ -277,7 +408,7 @@ def print_table(inventory_data):
 
     if missing_areas:
         print("\n" + "=" * 90)
-        print("【可能漏算位置】")
+        print("可能漏算位置")
         print("-" * 90)
         print(f"{'漏算位置':<15} | {'受影響物品':<12} | {'原因':<20} | {'不確定程度'}")
         print("-" * 90)
@@ -296,7 +427,7 @@ def print_table(inventory_data):
 
     if more_photos:
         print("\n" + "=" * 90)
-        print("【是否建議補拍】")
+        print("是否建議補拍")
         print("-" * 90)
 
         suggest = more_photos.get("建議補拍", False)

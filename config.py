@@ -8,32 +8,20 @@
 OPENAI_API_KEY = ""
 
 # API Base URL（自訂 API 端點）
-BASE_URL = "https://air.cgu.edu.tw/cgullmapi/v1"
+BASE_URL = None
+#BASE_URL = "https://air.cgu.edu.tw/cgullmapi/v1"
 
 # 使用的模型名稱（需支援圖片辨識）
 MODEL_NAME = "gpt-5.4"
 
-# 圖片資料夾路徑
-IMAGE_FOLDER = r"C:\Users\yanzi\Desktop\作業\專題\pictures"
+# 場景圖片根資料夾，裡面放 group_01、group_02...
+IMAGE_ROOT_FOLDER = r"C:\Users\yanzi\OneDrive\Desktop\專題\project\pictures"
 
-# 對照清單圖片的檔名（放在同一個資料夾中）
-# 這張圖片是盤點物品的對照表，用來比對實際盤點結果
-# 如果不需要對照圖片，請設為 ""（空字串）
-REFERENCE_IMAGE = "5.jpg"
+# 固定參照圖片路徑
+REFERENCE_IMAGE_NAME = "reference.jpg"
 
-# 每張圖片的拍攝位置（檔名 -> 拍攝角度）
-# 請根據你的圖片檔名修改（不需要包含對照圖片）
-# 如果新增圖片，只要在這裡加上對應的拍攝角度即可
-# 如果某張圖片沒有在這裡設定，程式會顯示「未設定拍攝位置」
-camera_positions = {
-    "1.jpg": "正面角度",
-    "2.jpg": "左側角度",
-    "3.jpg": "右側角度",
-    "4.jpg": "俯視角度",
-    # 如果之後新增更多圖片，在這裡加上即可，例如：
-    # "6.jpg": "補拍俯視角度",
-    # "7.jpg": "左後方近拍",
-}
+# 結果輸出資料夾
+RESULT_FOLDER = "results"
 
 # 盤點提示詞（你可以直接修改這段文字）
 # 注意：不要在這裡寫死圖片數量或檔名，程式會自動產生圖片說明
