@@ -359,23 +359,43 @@ def process_one_group(group_folder):
     # --- 印出表格 ---
     print_table(result_json)
 
+    # --- 第 2 階段新增：讀取 GPT 是否建議補拍 ---
+    need_more = result_json.get("need_more_photos", {})
+    suggest_reshoot = need_more.get("建議補拍", False)
+
+    if suggest_reshoot == True or suggest_reshoot == "true" or suggest_reshoot == "是" or suggest_reshoot == "需要":
+        print("\n" + "!" * 60)
+        print(f"{group_name}：GPT 建議補拍照片")
+        print("原因：", need_more.get("原因", "未提供原因"))
+
+        angles = need_more.get("建議補拍角度", [])
+        if angles:
+            print("建議補拍角度：")
+            for angle in angles:
+                print("  -", angle)
+
+        print("補拍重點：", need_more.get("補拍重點", "未提供補拍重點"))
+        print("!" * 60)
+    else:
+        print(f"\n{group_name}：GPT 判斷目前照片足夠，不需要補拍。")
+
     print(f"\n{group_name} 處理完成！")
 
 def print_table(inventory_data):
     """
-    用簡單的表格格式印出盤點結果（含遮擋分析、漏算位置、補拍建議）
+    用簡單表格印出盤點結果，以及是否建議補拍。
     """
-    # --- 1. 盤點結果表格 ---
     items = inventory_data.get("inventory", [])
+
+    print("\n" + "=" * 80)
+    print("盤點結果")
+    print("=" * 80)
 
     if not items:
         print("沒有辨識到任何物品。")
     else:
-        print("\n" + "=" * 90)
-        print("盤點結果")
-        print("-" * 90)
-        print(f"{'物品種類':<12} | {'辨識數量':<8} | {'AI備註'}")
-        print("-" * 90)
+        print(f"{'物品種類':<12} | {'盤點數量':<8} | {'AI備註'}")
+        print("-" * 80)
 
         for item in items:
             name = item.get("物品種類", "未知")
@@ -383,68 +403,33 @@ def print_table(inventory_data):
             note = item.get("AI備註", "")
             print(f"{name:<12} | {str(count):<8} | {note}")
 
-        print("=" * 90)
+    print("=" * 80)
 
-    # --- 2. 遮擋分析表格 ---
-    occlusion = inventory_data.get("occlusion_analysis", [])
+    # 印出是否建議補拍
+    need_more = inventory_data.get("need_more_photos", {})
 
-    if occlusion:
-        print("\n" + "=" * 90)
-        print("遮擋分析")
-        print("-" * 90)
-        print(f"{'位置或照片':<20} | {'遮擋情況':<25} | {'可能影響'}")
-        print("-" * 90)
+    print("\n是否建議補拍")
+    print("-" * 80)
 
-        for item in occlusion:
-            location = item.get("位置或照片", "未知")
-            situation = item.get("遮擋情況", "")
-            impact = item.get("可能影響", "")
-            print(f"{location:<20} | {situation:<25} | {impact}")
+    if need_more:
+        suggest = need_more.get("建議補拍", False)
+        reason = need_more.get("原因", "")
+        angles = need_more.get("建議補拍角度", [])
+        focus = need_more.get("補拍重點", "")
 
-        print("=" * 90)
+        print("建議補拍：", suggest)
+        print("原因：", reason)
 
-    # --- 3. 可能漏算位置表格 ---
-    missing_areas = inventory_data.get("possible_missing_areas", [])
-
-    if missing_areas:
-        print("\n" + "=" * 90)
-        print("可能漏算位置")
-        print("-" * 90)
-        print(f"{'漏算位置':<15} | {'受影響物品':<12} | {'原因':<20} | {'不確定程度'}")
-        print("-" * 90)
-
-        for item in missing_areas:
-            location = item.get("可能漏算的位置", "未知")
-            affected = item.get("受影響的物品種類", "")
-            reason = item.get("原因", "")
-            uncertainty = item.get("不確定程度", "")
-            print(f"{location:<15} | {affected:<12} | {reason:<20} | {uncertainty}")
-
-        print("=" * 90)
-
-    # --- 4. 是否建議補拍 ---
-    more_photos = inventory_data.get("need_more_photos", {})
-
-    if more_photos:
-        print("\n" + "=" * 90)
-        print("是否建議補拍")
-        print("-" * 90)
-
-        suggest = more_photos.get("建議補拍", False)
-        reason = more_photos.get("原因", "")
-        angles = more_photos.get("建議補拍角度", [])
-        focus = more_photos.get("補拍重點", "")
-
-        print(f"  建議補拍：{'是' if suggest else '否'}")
-        print(f"  原因：{reason}")
         if angles:
-            print(f"  建議補拍角度：{', '.join(angles) if isinstance(angles, list) else angles}")
-        if focus:
-            print(f"  補拍重點：{focus}")
+            print("建議補拍角度：")
+            for angle in angles:
+                print("  -", angle)
 
-        print("=" * 90)
+        print("補拍重點：", focus)
+    else:
+        print("GPT 沒有回傳 need_more_photos 欄位。")
 
-    # --- 5. 整體備註 ---
+    # 印出整體備註
     overall = inventory_data.get("overall_note", "")
     if overall:
-        print(f"\n整體備註：{overall}")
+        print("\n整體備註：", overall)
