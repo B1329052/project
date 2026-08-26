@@ -218,8 +218,32 @@ def analyze_image_viewpoints(scene_images, group_name):
     result_text = response.choices[0].message.content
     return result_text
 
+def build_viewpoint_text(viewpoint_json):
+    """
+    將 AI 判斷出的照片方向整理成文字，
+    讓第二階段盤點時可以使用。
+    """
+    image_viewpoints = viewpoint_json.get("image_viewpoints", [])
+
+    if not image_viewpoints:
+        return "目前沒有可用的照片方向判斷結果。\n"
+
+    text = "以下是 AI 已經先判斷出的場景照片拍攝方向：\n"
+
+    for item in image_viewpoints:
+        filename = item.get("圖片檔名", "未知圖片")
+        viewpoint = item.get("AI判斷拍攝角度", "無法判斷")
+        reason = item.get("判斷依據", "")
+
+        text += f"- {filename}：{viewpoint}"
+        if reason:
+            text += f"（判斷依據：{reason}）"
+        text += "\n"
+
+    return text
+
 # API 呼叫 ChatGPT
-def call_chatgpt(scene_images, reference_image_path, group_name):
+def call_chatgpt(scene_images, reference_image_path, group_name, viewpoint_json):
     """
     把場景圖片、對照圖片和提示詞一起送給 ChatGPT API
     scene_images: 場景圖片路徑列表（數量不固定）
@@ -259,7 +283,15 @@ def call_chatgpt(scene_images, reference_image_path, group_name):
     # --- 組合提示詞 ---
 
     image_info = build_image_info(scene_images, reference_image_path, group_name)
-    full_prompt = image_info + "\n" + PROMPT_TEXT
+    viewpoint_text = build_viewpoint_text(viewpoint_json)
+
+    full_prompt = (
+        image_info
+        + "\n"
+        + viewpoint_text
+        + "\n"
+        + PROMPT_TEXT
+    )
 
     # --- 組合訊息內容（文字 + 多張壓縮圖片）---
 
@@ -467,7 +499,12 @@ def process_one_group(group_folder):
         save_json(viewpoint_json, viewpoint_output_path)
 
         # --- 原本的盤點流程 ---
-        result_text = call_chatgpt(scene_images, reference_image_path, group_name)
+        result_text = call_chatgpt(
+            scene_images,
+            reference_image_path,
+            group_name,
+            viewpoint_json
+        )
 
         print("ChatGPT 回傳的原始結果：")
         print("-" * 50)
@@ -531,8 +568,22 @@ def process_one_group(group_folder):
 
 def print_table(inventory_data):
     """
-    用簡單表格印出盤點結果，以及是否建議補拍。
+    用簡單表格印出盤點結果、使用的照片方向，以及是否建議補拍。
     """
+
+    # 印出本次盤點使用的照片方向
+    viewpoints_used = inventory_data.get("image_viewpoints_used", [])
+
+    if viewpoints_used:
+        print("\n" + "=" * 80)
+        print("本次盤點使用的照片方向")
+        print("=" * 80)
+
+        for item in viewpoints_used:
+            filename = item.get("圖片檔名", "未知圖片")
+            viewpoint = item.get("AI判斷拍攝角度", "無法判斷")
+            print(f"{filename}：{viewpoint}")
+
     items = inventory_data.get("inventory", [])
 
     print("\n" + "=" * 80)
@@ -553,7 +604,6 @@ def print_table(inventory_data):
 
     print("=" * 80)
 
-    # 印出是否建議補拍
     need_more = inventory_data.get("need_more_photos", {})
 
     print("\n是否建議補拍")
@@ -570,14 +620,16 @@ def print_table(inventory_data):
 
         if angles:
             print("建議補拍角度：")
-            for angle in angles:
-                print("  -", angle)
+            if isinstance(angles, list):
+                for angle in angles:
+                    print("  -", angle)
+            else:
+                print("  -", angles)
 
         print("補拍重點：", focus)
     else:
         print("GPT 沒有回傳 need_more_photos 欄位。")
 
-    # 印出整體備註
     overall = inventory_data.get("overall_note", "")
     if overall:
         print("\n整體備註：", overall)
