@@ -14,6 +14,7 @@ from config import (
     BASE_URL,
     MODEL_NAME,
     PROMPT_TEXT,
+    VIEWPOINT_PROMPT_TEXT,
     REFERENCE_IMAGE_NAME,
     RESULT_FOLDER,
     MAX_RESUPPLY_ROUNDS,
@@ -154,6 +155,68 @@ def build_image_info(scene_images, reference_image_path, group_name):
     info += "\n請注意：場景圖片檔名可以任意，這些圖片都屬於同一個場景。\n"
 
     return info
+
+def analyze_image_viewpoints(scene_images, group_name):
+    """
+    第一階段：讓 GPT 判斷每張場景圖片的拍攝方向。
+    這個函式只判斷角度，不做物品盤點。
+    """
+    client = OpenAI(api_key=OPENAI_API_KEY, base_url=BASE_URL)
+
+    print("\n正在判斷照片拍攝方向...")
+
+    # 壓縮圖片，放到 compressed_images/group_name/viewpoints 資料夾
+    compressed_output_folder = os.path.join("compressed_images", group_name, "viewpoints")
+    compressed_scene = compress_images(scene_images, compressed_output_folder)
+
+    if len(compressed_scene) == 0:
+        raise Exception("所有場景圖片處理失敗，無法判斷拍攝方向。")
+
+    # 組合提示詞
+    full_prompt = f"目前處理的場景資料夾：{group_name}\n\n" + VIEWPOINT_PROMPT_TEXT
+
+    content_list = []
+
+    content_list.append({
+        "type": "text",
+        "text": full_prompt,
+    })
+
+    # 每張圖片前先加文字標註，讓 GPT 知道圖片檔名
+    for compressed_path in compressed_scene:
+        filename = os.path.basename(compressed_path)
+        print(f"  正在編碼方向判斷圖片：{filename}")
+
+        content_list.append({
+            "type": "text",
+            "text": f"接下來這張是場景圖片：{filename}"
+        })
+
+        base64_str = encode_image(compressed_path)
+        mime_type = get_mime_type(compressed_path)
+
+        content_list.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{mime_type};base64,{base64_str}",
+            },
+        })
+
+    print("\n正在呼叫 GPT 判斷照片方向...\n")
+
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[
+            {
+                "role": "user",
+                "content": content_list,
+            }
+        ],
+        max_completion_tokens=2048,
+    )
+
+    result_text = response.choices[0].message.content
+    return result_text
 
 # API 呼叫 ChatGPT
 def call_chatgpt(scene_images, reference_image_path, group_name):
@@ -306,7 +369,7 @@ def is_need_more_photos(result_json):
 
 def print_resupply_suggestion(result_json, group_name):
     """
-    印出 GPT 建議補拍的原因、角度與重點。
+    sugesst_reshoot印出 GPT 建議補拍的原因、角度與重點。
     """
     need_more = result_json.get("need_more_photos", {})
 
@@ -379,7 +442,31 @@ def process_one_group(group_folder):
         for img in scene_images:
             print(f"  - {os.path.basename(img)}")
 
-        # --- 呼叫 GPT ---
+        # --- 第 4 階段新增：AI 判斷照片方向 ---
+        viewpoint_text = analyze_image_viewpoints(scene_images, group_name)
+
+        print("GPT 判斷照片方向的原始結果：")
+        print("-" * 50)
+        print(viewpoint_text)
+        print("-" * 50)
+
+        # 清理並解析方向 JSON
+        clean_viewpoint_text = clean_json_text(viewpoint_text)
+
+        try:
+            viewpoint_json = json.loads(clean_viewpoint_text)
+            print("\n照片方向 JSON 解析成功！")
+        except json.JSONDecodeError as e:
+            print(f"\n警告：{group_name} 照片方向回傳內容不是合法 JSON：{e}")
+            print("請檢查上方原始回傳內容。")
+            return
+
+        # 儲存方向判斷結果
+        viewpoint_output_filename = f"viewpoint_result_{group_name}_round_{round_number}.json"
+        viewpoint_output_path = os.path.join(RESULT_FOLDER, viewpoint_output_filename)
+        save_json(viewpoint_json, viewpoint_output_path)
+
+        # --- 原本的盤點流程 ---
         result_text = call_chatgpt(scene_images, reference_image_path, group_name)
 
         print("ChatGPT 回傳的原始結果：")
