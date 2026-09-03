@@ -9,6 +9,7 @@ import base64
 import json
 from PIL import Image, ImageOps, ImageEnhance
 from openai import OpenAI
+from openpyxl import Workbook
 from config import (
     OPENAI_API_KEY,
     BASE_URL,
@@ -356,6 +357,39 @@ def save_json(data, filename="inventory_result.json"):
         json.dump(data, f, ensure_ascii=False, indent=2)
     print(f"結果已儲存到：{filename}")
 
+def save_excel(result_json, output_path):
+    """
+    將盤點結果匯出成 Excel。
+    只保留物品種類和數量。
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "盤點結果"
+
+    # 標題列
+    ws.append(["物品種類", "數量"])
+
+    inventory = result_json.get("inventory", [])
+
+    for item in inventory:
+        name = item.get("物品種類", "未知")
+
+        # 主要讀這個欄位
+        count = item.get("辨識出的物品數量", "")
+
+        # 如果你之後欄位名稱改成「場景圖片中的數量」，這裡也能讀到
+        if count == "":
+            count = item.get("場景圖片中的數量", "")
+
+        ws.append([name, count])
+
+    # 簡單調整欄寬
+    ws.column_dimensions["A"].width = 25
+    ws.column_dimensions["B"].width = 12
+
+    wb.save(output_path)
+    print(f"Excel 結果已儲存：{output_path}")
+
 def is_need_more_photos(result_json):
     """
     判斷 GPT 是否建議補拍。
@@ -474,7 +508,14 @@ def process_one_group(group_folder):
             final_output_path = os.path.join(RESULT_FOLDER, final_output_filename)
 
             save_json(result_json, final_output_path)
-            print(f"\n{group_name} 最終結果已輸出：{final_output_path}")
+
+            final_excel_filename = f"inventory_result_{group_name}_final.xlsx"
+            final_excel_path = os.path.join(RESULT_FOLDER, final_excel_filename)
+
+            save_excel(result_json, final_excel_path)
+
+            print(f"\n{group_name} 最終 JSON 結果已輸出：{final_output_path}")
+            print(f"{group_name} 最終 Excel 結果已輸出：{final_excel_path}")
             break
 
         print_resupply_suggestion(result_json, group_name)
