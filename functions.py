@@ -16,10 +16,10 @@ from config import (
     PROMPT_TEXT,
     REFERENCE_IMAGE_NAME,
     RESULT_FOLDER,
+    COMPRESSED_FOLDER,
     MAX_RESUPPLY_ROUNDS,
 )
 
-# 把符合格式的圖片路徑存進 image_files，最後排序後回傳
 def get_image_files(folder_path):
     """
     讀取資料夾中所有支援的圖片檔案（.jpg, .jpeg, .png）
@@ -57,7 +57,6 @@ def get_group_folders(root_folder):
     group_folders.sort()
     return group_folders
 
-# 影像前處理
 def compress_images(image_files, output_folder="compressed_images"):
     """
     將圖片清單中的每張圖片縮小尺寸並增加對比度後存到指定資料夾
@@ -110,7 +109,6 @@ def compress_images(image_files, output_folder="compressed_images"):
 
     return compressed_paths
 
-# 把圖片轉成 base64 字串
 def encode_image(image_path):
     """
     將圖片檔案讀取並轉成 base64 字串
@@ -165,7 +163,7 @@ def build_image_info(scene_images, reference_image_path, group_name):
     print("\n正在判斷照片拍攝方向...")
 
     # 壓縮圖片，放到 compressed_images/group_name/viewpoints 資料夾
-    compressed_output_folder = os.path.join("compressed_images", group_name, "viewpoints")
+    compressed_output_folder = os.path.join(COMPRESSED_FOLDER, group_name)
     compressed_scene = compress_images(scene_images, compressed_output_folder)
 
     if len(compressed_scene) == 0:
@@ -217,7 +215,6 @@ def build_image_info(scene_images, reference_image_path, group_name):
     result_text = response.choices[0].message.content
     return result_text
 
-# API 呼叫 ChatGPT
 def call_chatgpt(scene_images, reference_image_path, group_name):
     """
     把場景圖片、對照圖片和提示詞一起送給 ChatGPT API

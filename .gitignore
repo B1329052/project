@@ -12,3 +12,5 @@ viewpoint_result*.json
 
 .venv/
 .env
+
+api_key.txt

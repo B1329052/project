@@ -4,29 +4,46 @@
 # 所有可調整的參數都集中在這個檔案中
 # ============================================================
 
-# OpenAI API Key（請填入你自己的 key）
-OPENAI_API_KEY = ""
+import os
 
-# API Base URL（自訂 API 端點）
-#BASE_URL = None
+# API
 BASE_URL = "https://air.cgu.edu.tw/cgullmapi/v1"
-
-# 使用的模型名稱（需支援圖片辨識）
 MODEL_NAME = "gpt-5.4"
 
-# 場景圖片根資料夾，裡面放 group_01、group_02...
-IMAGE_ROOT_FOLDER = r"C:\Users\yanzi\OneDrive\Desktop\專題\project\pictures"
+# 專案根目錄
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 固定參照圖片路徑
+# 專案內資料夾
+IMAGE_ROOT_FOLDER = os.path.join(BASE_DIR, "pictures")
+RESULT_FOLDER = os.path.join(BASE_DIR, "results")
+COMPRESSED_FOLDER = os.path.join(BASE_DIR, "compressed_images")
+
 REFERENCE_IMAGE_NAME = "reference.jpg"
-
-# 結果輸出資料夾
-RESULT_FOLDER = "results"
-
-# 最多允許補拍重新盤點幾次，避免程式無限重跑
 MAX_RESUPPLY_ROUNDS = 3
 
-# 盤點提示詞（你可以直接修改這段文字）
+# API key 外部檔案
+API_KEY_FILE = os.path.join(BASE_DIR, "api_key.txt")
+
+def read_api_key():
+    """
+    從 api_key.txt 讀取 API key。
+    """
+    if not os.path.exists(API_KEY_FILE):
+        raise FileNotFoundError(
+            "找不到 api_key.txt，請在專案資料夾中建立 api_key.txt，並把 API key 放進去。"
+        )
+
+    with open(API_KEY_FILE, "r", encoding="utf-8") as file:
+        api_key = file.read().strip()
+
+    if not api_key:
+        raise ValueError("api_key.txt 是空的，請確認裡面有填入 API key。")
+
+    return api_key
+
+OPENAI_API_KEY = read_api_key()
+
+# 盤點提示詞
 PROMPT_TEXT = """
 我會提供一張參照圖片，以及多張同一個場景的盤點圖片。
 
