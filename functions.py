@@ -14,7 +14,6 @@ from config import (
     BASE_URL,
     MODEL_NAME,
     PROMPT_TEXT,
-    VIEWPOINT_PROMPT_TEXT,
     REFERENCE_IMAGE_NAME,
     RESULT_FOLDER,
     MAX_RESUPPLY_ROUNDS,
@@ -156,7 +155,7 @@ def build_image_info(scene_images, reference_image_path, group_name):
 
     return info
 
-def analyze_image_viewpoints(scene_images, group_name):
+
     """
     第一階段：讓 GPT 判斷每張場景圖片的拍攝方向。
     這個函式只判斷角度，不做物品盤點。
@@ -218,32 +217,8 @@ def analyze_image_viewpoints(scene_images, group_name):
     result_text = response.choices[0].message.content
     return result_text
 
-def build_viewpoint_text(viewpoint_json):
-    """
-    將 AI 判斷出的照片方向整理成文字，
-    讓第二階段盤點時可以使用。
-    """
-    image_viewpoints = viewpoint_json.get("image_viewpoints", [])
-
-    if not image_viewpoints:
-        return "目前沒有可用的照片方向判斷結果。\n"
-
-    text = "以下是 AI 已經先判斷出的場景照片拍攝方向：\n"
-
-    for item in image_viewpoints:
-        filename = item.get("圖片檔名", "未知圖片")
-        viewpoint = item.get("AI判斷拍攝角度", "無法判斷")
-        reason = item.get("判斷依據", "")
-
-        text += f"- {filename}：{viewpoint}"
-        if reason:
-            text += f"（判斷依據：{reason}）"
-        text += "\n"
-
-    return text
-
 # API 呼叫 ChatGPT
-def call_chatgpt(scene_images, reference_image_path, group_name, viewpoint_json):
+def call_chatgpt(scene_images, reference_image_path, group_name):
     """
     把場景圖片、對照圖片和提示詞一起送給 ChatGPT API
     scene_images: 場景圖片路徑列表（數量不固定）
@@ -283,12 +258,9 @@ def call_chatgpt(scene_images, reference_image_path, group_name, viewpoint_json)
     # --- 組合提示詞 ---
 
     image_info = build_image_info(scene_images, reference_image_path, group_name)
-    viewpoint_text = build_viewpoint_text(viewpoint_json)
 
     full_prompt = (
         image_info
-        + "\n"
-        + viewpoint_text
         + "\n"
         + PROMPT_TEXT
     )
@@ -304,14 +276,14 @@ def call_chatgpt(scene_images, reference_image_path, group_name, viewpoint_json)
         "text": full_prompt,
     })
 
-    # 接下來：每張壓縮後的場景圖片轉成 base64 後加入
+    # --- 加入參照圖片，只加入一次 ---
     if compressed_ref_path:
         ref_filename = os.path.basename(compressed_ref_path)
-        print(f"  正在編碼壓縮後參照圖片：{ref_filename}")
+        print(f"  正在編碼參照圖片：{ref_filename}")
 
         content_list.append({
             "type": "text",
-            "text": f"接下來這張是參照圖片：{ref_filename}"
+            "text": f"接下來這張是參照圖片：{ref_filename}。這張只用來判斷要盤點哪些物品種類，不要統計這張的數量。"
         })
 
         base64_str = encode_image(compressed_ref_path)
@@ -324,17 +296,23 @@ def call_chatgpt(scene_images, reference_image_path, group_name, viewpoint_json)
             },
         })
 
-    # 加入壓縮後的對照清單圖片
-    if compressed_ref_path:
-        ref_filename = os.path.basename(compressed_ref_path)
-        print(f"  正在編碼壓縮後對照清單圖片：{ref_filename}")
+    # --- 加入所有場景圖片 ---
+    for compressed_path in compressed_scene:
+        scene_filename = os.path.basename(compressed_path)
+        print(f"  正在編碼場景圖片：{scene_filename}")
 
-        base64_str = encode_image(compressed_ref_path)
+        content_list.append({
+            "type": "text",
+            "text": f"接下來這張是場景圖片：{scene_filename}。最終盤點數量請從這張和其他場景圖片中統計。"
+        })
+
+        base64_str = encode_image(compressed_path)
+        mime_type = get_mime_type(compressed_path)
 
         content_list.append({
             "type": "image_url",
             "image_url": {
-                "url": f"data:image/jpeg;base64,{base64_str}",
+                "url": f"data:{mime_type};base64,{base64_str}",
             },
         })
 
@@ -384,7 +362,6 @@ def save_json(data, filename="inventory_result.json"):
 def is_need_more_photos(result_json):
     """
     判斷 GPT 是否建議補拍。
-    支援布林值 true/false，也支援字串形式，例如「是」、「true」。
     """
     need_more = result_json.get("need_more_photos", {})
     suggest = need_more.get("建議補拍", False)
@@ -401,7 +378,7 @@ def is_need_more_photos(result_json):
 
 def print_resupply_suggestion(result_json, group_name):
     """
-    sugesst_reshoot印出 GPT 建議補拍的原因、角度與重點。
+    印出 GPT 建議補拍的原因、角度與重點。
     """
     need_more = result_json.get("need_more_photos", {})
 
@@ -433,7 +410,6 @@ def process_one_group(group_folder):
     print(f"開始處理：{group_name}")
     print("=" * 60)
 
-    # --- 找出這一組自己的參照圖片 ---
     reference_image_path = os.path.join(group_folder, REFERENCE_IMAGE_NAME)
 
     if not os.path.isfile(reference_image_path):
@@ -443,7 +419,6 @@ def process_one_group(group_folder):
 
     print(f"找到參照圖片：{REFERENCE_IMAGE_NAME}")
 
-    # --- 建立 results 資料夾 ---
     if not os.path.exists(RESULT_FOLDER):
         os.makedirs(RESULT_FOLDER)
 
@@ -454,15 +429,13 @@ def process_one_group(group_folder):
         print(f"{group_name}：第 {round_number} 輪盤點")
         print("-" * 60)
 
-        # 每一輪都重新讀取 group 裡的所有圖片
-        # 這樣你補拍後放進資料夾的新照片才會被讀到
+        # 每一輪都重新讀取圖片，這樣補拍後的新照片才會被讀到
         all_images = get_image_files(group_folder)
 
         scene_images = []
         for img in all_images:
             filename = os.path.basename(img)
 
-            # 排除參照圖片，其他都是場景圖片
             if filename != REFERENCE_IMAGE_NAME:
                 scene_images.append(img)
 
@@ -474,44 +447,13 @@ def process_one_group(group_folder):
         for img in scene_images:
             print(f"  - {os.path.basename(img)}")
 
-        # --- 第 4 階段新增：AI 判斷照片方向 ---
-        viewpoint_text = analyze_image_viewpoints(scene_images, group_name)
-
-        print("GPT 判斷照片方向的原始結果：")
-        print("-" * 50)
-        print(viewpoint_text)
-        print("-" * 50)
-
-        # 清理並解析方向 JSON
-        clean_viewpoint_text = clean_json_text(viewpoint_text)
-
-        try:
-            viewpoint_json = json.loads(clean_viewpoint_text)
-            print("\n照片方向 JSON 解析成功！")
-        except json.JSONDecodeError as e:
-            print(f"\n警告：{group_name} 照片方向回傳內容不是合法 JSON：{e}")
-            print("請檢查上方原始回傳內容。")
-            return
-
-        # 儲存方向判斷結果
-        viewpoint_output_filename = f"viewpoint_result_{group_name}_round_{round_number}.json"
-        viewpoint_output_path = os.path.join(RESULT_FOLDER, viewpoint_output_filename)
-        save_json(viewpoint_json, viewpoint_output_path)
-
-        # --- 原本的盤點流程 ---
-        result_text = call_chatgpt(
-            scene_images,
-            reference_image_path,
-            group_name,
-            viewpoint_json
-        )
+        result_text = call_chatgpt(scene_images, reference_image_path, group_name)
 
         print("ChatGPT 回傳的原始結果：")
         print("-" * 50)
         print(result_text)
         print("-" * 50)
 
-        # --- 解析 JSON ---
         clean_text = clean_json_text(result_text)
 
         try:
@@ -522,38 +464,32 @@ def process_one_group(group_folder):
             print("請檢查上方原始回傳內容。")
             return
 
-        # --- 儲存本輪結果 ---
         round_output_filename = f"inventory_result_{group_name}_round_{round_number}.json"
         round_output_path = os.path.join(RESULT_FOLDER, round_output_filename)
-        save_json(result_json, round_output_path)
 
-        # --- 印出表格 ---
+        save_json(result_json, round_output_path)
         print_table(result_json)
 
-        # --- 判斷是否需要補拍 ---
         if not is_need_more_photos(result_json):
             print(f"\n{group_name}：GPT 判斷目前照片足夠，不需要補拍。")
 
-            # 儲存 final 結果
             final_output_filename = f"inventory_result_{group_name}_final.json"
             final_output_path = os.path.join(RESULT_FOLDER, final_output_filename)
-            save_json(result_json, final_output_path)
 
+            save_json(result_json, final_output_path)
             print(f"\n{group_name} 最終結果已輸出：{final_output_path}")
             break
 
-        # 如果需要補拍，顯示建議
         print_resupply_suggestion(result_json, group_name)
 
-        # 避免無限重跑
         if round_number >= MAX_RESUPPLY_ROUNDS:
             print(f"\n{group_name} 已達到最多補拍重跑次數：{MAX_RESUPPLY_ROUNDS}")
             print("程式停止此 group 的補拍流程，請先檢查目前結果。")
             break
 
-        # 詢問使用者是否已經補拍
         print(f"\n請將補拍照片放入這個資料夾：")
         print(group_folder)
+
         user_input = input("放好後輸入 y 重新盤點；輸入 n 跳過此 group：").strip().lower()
 
         if user_input == "y":
@@ -561,29 +497,15 @@ def process_one_group(group_folder):
             print("\n重新讀取照片並再次盤點...")
             continue
         else:
-            print(f"\n你選擇不繼續補拍，{group_name} 暫停在第 {round_number} 輪結果。")
+            print(f"\n你選擇不繼續補拍，{group_name} 停在第 {round_number} 輪結果。")
             break
 
     print(f"\n{group_name} 處理完成！")
 
 def print_table(inventory_data):
     """
-    用簡單表格印出盤點結果、使用的照片方向，以及是否建議補拍。
+    印出盤點結果，以及是否建議補拍。
     """
-
-    # 印出本次盤點使用的照片方向
-    viewpoints_used = inventory_data.get("image_viewpoints_used", [])
-
-    if viewpoints_used:
-        print("\n" + "=" * 80)
-        print("本次盤點使用的照片方向")
-        print("=" * 80)
-
-        for item in viewpoints_used:
-            filename = item.get("圖片檔名", "未知圖片")
-            viewpoint = item.get("AI判斷拍攝角度", "無法判斷")
-            print(f"{filename}：{viewpoint}")
-
     items = inventory_data.get("inventory", [])
 
     print("\n" + "=" * 80)
@@ -604,31 +526,33 @@ def print_table(inventory_data):
 
     print("=" * 80)
 
+    # --- 補拍判斷結果 ---
     need_more = inventory_data.get("need_more_photos", {})
 
     print("\n是否建議補拍")
     print("-" * 80)
 
-    if need_more:
-        suggest = need_more.get("建議補拍", False)
-        reason = need_more.get("原因", "")
-        angles = need_more.get("建議補拍角度", [])
-        focus = need_more.get("補拍重點", "")
-
-        print("建議補拍：", suggest)
-        print("原因：", reason)
-
-        if angles:
-            print("建議補拍角度：")
-            if isinstance(angles, list):
-                for angle in angles:
-                    print("  -", angle)
-            else:
-                print("  -", angles)
-
-        print("補拍重點：", focus)
-    else:
+    if not need_more:
         print("GPT 沒有回傳 need_more_photos 欄位。")
+        return
+
+    suggest = need_more.get("建議補拍", False)
+    reason = need_more.get("原因", "")
+    angles = need_more.get("建議補拍角度", [])
+    focus = need_more.get("補拍重點", "")
+
+    print("建議補拍：", suggest)
+    print("原因：", reason)
+
+    if angles:
+        print("建議補拍角度：")
+        if isinstance(angles, list):
+            for angle in angles:
+                print("  -", angle)
+        else:
+            print("  -", angles)
+
+    print("補拍重點：", focus)
 
     overall = inventory_data.get("overall_note", "")
     if overall:
