@@ -16,6 +16,7 @@ from config import (
     PROMPT_TEXT,
     REFERENCE_IMAGE_NAME,
     RESULT_FOLDER,
+    MAX_RESUPPLY_ROUNDS,
 )
 
 # 把符合格式的圖片路徑存進 image_files，最後排序後回傳
@@ -285,11 +286,51 @@ def save_json(data, filename="inventory_result.json"):
         json.dump(data, f, ensure_ascii=False, indent=2)
     print(f"結果已儲存到：{filename}")
 
+def is_need_more_photos(result_json):
+    """
+    判斷 GPT 是否建議補拍。
+    支援布林值 true/false，也支援字串形式，例如「是」、「true」。
+    """
+    need_more = result_json.get("need_more_photos", {})
+    suggest = need_more.get("建議補拍", False)
+
+    if suggest == True:
+        return True
+
+    if isinstance(suggest, str):
+        suggest = suggest.strip().lower()
+        if suggest in ["true", "yes", "是", "需要", "建議補拍"]:
+            return True
+
+    return False
+
+def print_resupply_suggestion(result_json, group_name):
+    """
+    印出 GPT 建議補拍的原因、角度與重點。
+    """
+    need_more = result_json.get("need_more_photos", {})
+
+    print("\n" + "!" * 60)
+    print(f"{group_name}：GPT 建議補拍照片")
+    print("原因：", need_more.get("原因", "未提供原因"))
+
+    angles = need_more.get("建議補拍角度", [])
+    if angles:
+        print("建議補拍角度：")
+        if isinstance(angles, list):
+            for angle in angles:
+                print("  -", angle)
+        else:
+            print("  -", angles)
+
+    print("補拍重點：", need_more.get("補拍重點", "未提供補拍重點"))
+    print("!" * 60)
+
 def process_one_group(group_folder):
     """
     處理單一 group 資料夾。
-    每個 group 代表一個場景。
-    每個 group 裡面都有自己的 reference.jpg。
+    如果 GPT 建議補拍，使用者可以把新照片放進同一個 group，
+    然後程式重新讀取所有照片並再次盤點。
     """
     group_name = os.path.basename(group_folder)
 
@@ -307,77 +348,97 @@ def process_one_group(group_folder):
 
     print(f"找到參照圖片：{REFERENCE_IMAGE_NAME}")
 
-    # --- 讀取這個 group 裡的所有圖片 ---
-    all_images = get_image_files(group_folder)
-
-    # --- 把 reference.jpg 排除，剩下的都是場景圖片 ---
-    scene_images = []
-
-    for img in all_images:
-        filename = os.path.basename(img)
-
-        if filename != REFERENCE_IMAGE_NAME:
-            scene_images.append(img)
-
-    if len(scene_images) == 0:
-        print(f"提醒：{group_name} 裡沒有找到場景圖片，跳過此組。")
-        return
-
-    print(f"找到 {len(scene_images)} 張場景圖片：")
-    for img in scene_images:
-        print(f"  - {os.path.basename(img)}")
-
-    # --- 呼叫 GPT ---
-    result_text = call_chatgpt(scene_images, reference_image_path, group_name)
-
-    print("ChatGPT 回傳的原始結果：")
-    print("-" * 50)
-    print(result_text)
-    print("-" * 50)
-
-    # --- 解析 JSON ---
-    clean_text = clean_json_text(result_text)
-
-    try:
-        result_json = json.loads(clean_text)
-        print("\nJSON 解析成功！")
-    except json.JSONDecodeError as e:
-        print(f"\n警告：{group_name} 回傳內容不是合法 JSON：{e}")
-        print("請檢查上方原始回傳內容。")
-        return
-
     # --- 建立 results 資料夾 ---
     if not os.path.exists(RESULT_FOLDER):
         os.makedirs(RESULT_FOLDER)
 
-    # --- 每組輸出不同檔名 ---
-    output_filename = f"inventory_result_{group_name}.json"
-    output_path = os.path.join(RESULT_FOLDER, output_filename)
+    round_number = 1
 
-    save_json(result_json, output_path)
+    while True:
+        print("\n" + "-" * 60)
+        print(f"{group_name}：第 {round_number} 輪盤點")
+        print("-" * 60)
 
-    # --- 印出表格 ---
-    print_table(result_json)
+        # 每一輪都重新讀取 group 裡的所有圖片
+        # 這樣你補拍後放進資料夾的新照片才會被讀到
+        all_images = get_image_files(group_folder)
 
-    # --- 第 2 階段新增：讀取 GPT 是否建議補拍 ---
-    need_more = result_json.get("need_more_photos", {})
-    suggest_reshoot = need_more.get("建議補拍", False)
+        scene_images = []
+        for img in all_images:
+            filename = os.path.basename(img)
 
-    if suggest_reshoot == True or suggest_reshoot == "true" or suggest_reshoot == "是" or suggest_reshoot == "需要":
-        print("\n" + "!" * 60)
-        print(f"{group_name}：GPT 建議補拍照片")
-        print("原因：", need_more.get("原因", "未提供原因"))
+            # 排除參照圖片，其他都是場景圖片
+            if filename != REFERENCE_IMAGE_NAME:
+                scene_images.append(img)
 
-        angles = need_more.get("建議補拍角度", [])
-        if angles:
-            print("建議補拍角度：")
-            for angle in angles:
-                print("  -", angle)
+        if len(scene_images) == 0:
+            print(f"提醒：{group_name} 裡沒有找到場景圖片，跳過此組。")
+            return
 
-        print("補拍重點：", need_more.get("補拍重點", "未提供補拍重點"))
-        print("!" * 60)
-    else:
-        print(f"\n{group_name}：GPT 判斷目前照片足夠，不需要補拍。")
+        print(f"找到 {len(scene_images)} 張場景圖片：")
+        for img in scene_images:
+            print(f"  - {os.path.basename(img)}")
+
+        # --- 呼叫 GPT ---
+        result_text = call_chatgpt(scene_images, reference_image_path, group_name)
+
+        print("ChatGPT 回傳的原始結果：")
+        print("-" * 50)
+        print(result_text)
+        print("-" * 50)
+
+        # --- 解析 JSON ---
+        clean_text = clean_json_text(result_text)
+
+        try:
+            result_json = json.loads(clean_text)
+            print("\nJSON 解析成功！")
+        except json.JSONDecodeError as e:
+            print(f"\n警告：{group_name} 第 {round_number} 輪回傳內容不是合法 JSON：{e}")
+            print("請檢查上方原始回傳內容。")
+            return
+
+        # --- 儲存本輪結果 ---
+        round_output_filename = f"inventory_result_{group_name}_round_{round_number}.json"
+        round_output_path = os.path.join(RESULT_FOLDER, round_output_filename)
+        save_json(result_json, round_output_path)
+
+        # --- 印出表格 ---
+        print_table(result_json)
+
+        # --- 判斷是否需要補拍 ---
+        if not is_need_more_photos(result_json):
+            print(f"\n{group_name}：GPT 判斷目前照片足夠，不需要補拍。")
+
+            # 儲存 final 結果
+            final_output_filename = f"inventory_result_{group_name}_final.json"
+            final_output_path = os.path.join(RESULT_FOLDER, final_output_filename)
+            save_json(result_json, final_output_path)
+
+            print(f"\n{group_name} 最終結果已輸出：{final_output_path}")
+            break
+
+        # 如果需要補拍，顯示建議
+        print_resupply_suggestion(result_json, group_name)
+
+        # 避免無限重跑
+        if round_number >= MAX_RESUPPLY_ROUNDS:
+            print(f"\n{group_name} 已達到最多補拍重跑次數：{MAX_RESUPPLY_ROUNDS}")
+            print("程式停止此 group 的補拍流程，請先檢查目前結果。")
+            break
+
+        # 詢問使用者是否已經補拍
+        print(f"\n請將補拍照片放入這個資料夾：")
+        print(group_folder)
+        user_input = input("放好後輸入 y 重新盤點；輸入 n 跳過此 group：").strip().lower()
+
+        if user_input == "y":
+            round_number += 1
+            print("\n重新讀取照片並再次盤點...")
+            continue
+        else:
+            print(f"\n你選擇不繼續補拍，{group_name} 暫停在第 {round_number} 輪結果。")
+            break
 
     print(f"\n{group_name} 處理完成！")
 
