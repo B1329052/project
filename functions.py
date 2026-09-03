@@ -155,7 +155,7 @@ def build_image_info(scene_images, reference_image_path, group_name):
 
     return info
 
-def analyze_image_viewpoints(scene_images, group_name):
+
     """
     第一階段：讓 GPT 判斷每張場景圖片的拍攝方向。
     這個函式只判斷角度，不做物品盤點。
@@ -217,38 +217,8 @@ def analyze_image_viewpoints(scene_images, group_name):
     result_text = response.choices[0].message.content
     return result_text
 
-def build_viewpoint_text(viewpoint_json):
-    """
-    將照片方向 JSON 整理成文字。
-    如果目前沒有 viewpoint_json，就直接回傳空字串。
-    """
-
-    if viewpoint_json is None:
-        return ""
-
-    image_viewpoints = viewpoint_json.get("image_viewpoints", [])
-
-    if not image_viewpoints:
-        return ""
-
-    text = "以下是 AI 已經先判斷出的場景照片拍攝方向：\n"
-
-    for item in image_viewpoints:
-        filename = item.get("圖片檔名", "未知圖片")
-        viewpoint = item.get("AI判斷拍攝角度", "無法判斷")
-        reason = item.get("判斷依據", "")
-
-        text += f"- {filename}：{viewpoint}"
-
-        if reason:
-            text += f"（判斷依據：{reason}）"
-
-        text += "\n"
-
-    return text
-
 # API 呼叫 ChatGPT
-def call_chatgpt(scene_images, reference_image_path, group_name, viewpoint_json=None):
+def call_chatgpt(scene_images, reference_image_path, group_name):
     """
     把場景圖片、對照圖片和提示詞一起送給 ChatGPT API
     scene_images: 場景圖片路徑列表（數量不固定）
@@ -288,12 +258,9 @@ def call_chatgpt(scene_images, reference_image_path, group_name, viewpoint_json=
     # --- 組合提示詞 ---
 
     image_info = build_image_info(scene_images, reference_image_path, group_name)
-    viewpoint_text = build_viewpoint_text(viewpoint_json)
 
     full_prompt = (
         image_info
-        + "\n"
-        + viewpoint_text
         + "\n"
         + PROMPT_TEXT
     )
