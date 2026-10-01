@@ -16,6 +16,7 @@ from config import (
     MODEL_NAME,
     PROMPT_TEXT,
     REFERENCE_IMAGE_NAME,
+    OVERVIEW_IMAGE_NAME,
     RESULT_FOLDER,
     COMPRESSED_FOLDER,
     MAX_RESUPPLY_ROUNDS,
@@ -90,7 +91,7 @@ def compress_images(image_files, output_folder="compressed_images"):
             print(f"  原始圖片：{filename}（{original_size / 1024:.1f} KB）")
 
             # 縮小圖片，保持比例，最大不超過 800x600
-            img.thumbnail((800, 600))
+            img.thumbnail((1600, 1200))
 
             # 增加 50% 對比度
             enhancer = ImageEnhance.Contrast(img)
@@ -216,11 +217,12 @@ def build_image_info(scene_images, reference_image_path, group_name):
     result_text = response.choices[0].message.content
     return result_text
 
-def call_chatgpt(scene_images, reference_image_path, group_name):
+def call_chatgpt(scene_images, reference_image_path, group_name, overview_image_path=None):
     """
-    把場景圖片、對照圖片和提示詞一起送給 ChatGPT API
+    把場景圖片、對照圖片、全景圖和提示詞一起送給 ChatGPT API
     scene_images: 場景圖片路徑列表（數量不固定）
     reference_image_path: 對照清單圖片路徑（可以是 None）
+    overview_image_path: 全景圖路徑（可以是 None）
     回傳：ChatGPT 回傳的文字內容
     """
     # 建立 OpenAI 客戶端
@@ -252,6 +254,16 @@ def call_chatgpt(scene_images, reference_image_path, group_name):
             compressed_ref_path = compressed_ref_list[0]
         else:
             print("對照清單圖片壓縮失敗，將不使用對照圖片。")
+
+    # 壓縮全景圖（如果有的話）
+    compressed_overview_path = None
+    if overview_image_path:
+        print("\n正在壓縮全景圖...")
+        compressed_overview_list = compress_images([overview_image_path], compressed_output_folder)
+        if len(compressed_overview_list) > 0:
+            compressed_overview_path = compressed_overview_list[0]
+        else:
+            print("全景圖壓縮失敗，將不使用全景圖。")
 
     # --- 組合提示詞 ---
 
@@ -286,6 +298,26 @@ def call_chatgpt(scene_images, reference_image_path, group_name):
 
         base64_str = encode_image(compressed_ref_path)
         mime_type = get_mime_type(compressed_ref_path)
+
+        content_list.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{mime_type};base64,{base64_str}",
+            },
+        })
+
+    # --- 加入全景圖（如果有的話）---
+    if compressed_overview_path:
+        overview_filename = os.path.basename(compressed_overview_path)
+        print(f"  正在編碼全景圖：{overview_filename}")
+
+        content_list.append({
+            "type": "text",
+            "text": f"接下來這張是盤點物品全景圖：{overview_filename}。請用這張圖確認場景整體物品分布、協助去除重複計算，全景圖中的物品可列入正式盤點數量。"
+        })
+
+        base64_str = encode_image(compressed_overview_path)
+        mime_type = get_mime_type(compressed_overview_path)
 
         content_list.append({
             "type": "image_url",
@@ -450,6 +482,14 @@ def process_one_group(group_folder):
 
     print(f"找到參照圖片：{REFERENCE_IMAGE_NAME}")
 
+    # 偵測全景圖（overview.jpg）
+    overview_image_path = os.path.join(group_folder, OVERVIEW_IMAGE_NAME)
+    if os.path.isfile(overview_image_path):
+        print(f"找到全景圖：{OVERVIEW_IMAGE_NAME}")
+    else:
+        overview_image_path = None
+        print(f"未找到全景圖（{OVERVIEW_IMAGE_NAME}），將不使用全景圖。")
+
     if not os.path.exists(RESULT_FOLDER):
         os.makedirs(RESULT_FOLDER)
 
@@ -467,7 +507,8 @@ def process_one_group(group_folder):
         for img in all_images:
             filename = os.path.basename(img)
 
-            if filename != REFERENCE_IMAGE_NAME:
+            # 排除 reference.jpg 和 overview.jpg，兩者都不列為一般場景圖片
+            if filename != REFERENCE_IMAGE_NAME and filename != OVERVIEW_IMAGE_NAME:
                 scene_images.append(img)
 
         if len(scene_images) == 0:
@@ -478,7 +519,7 @@ def process_one_group(group_folder):
         for img in scene_images:
             print(f"  - {os.path.basename(img)}")
 
-        result_text = call_chatgpt(scene_images, reference_image_path, group_name)
+        result_text = call_chatgpt(scene_images, reference_image_path, group_name, overview_image_path)
 
         print("ChatGPT 回傳的原始結果：")
         print("-" * 50)
