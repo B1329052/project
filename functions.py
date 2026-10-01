@@ -19,7 +19,6 @@ from config import (
     OVERVIEW_IMAGE_NAME,
     RESULT_FOLDER,
     COMPRESSED_FOLDER,
-    MAX_RESUPPLY_ROUNDS,
 )
 
 def get_image_files(folder_path):
@@ -90,7 +89,7 @@ def compress_images(image_files, output_folder="compressed_images"):
             original_size = os.path.getsize(image_path)
             print(f"  原始圖片：{filename}（{original_size / 1024:.1f} KB）")
 
-            # 縮小圖片，保持比例，最大不超過 800x600
+            # 縮小圖片，保持比例，最大不超過 1600x1200
             img.thumbnail((1600, 1200))
 
             # 增加 50% 對比度
@@ -422,50 +421,10 @@ def save_excel(result_json, output_path):
     wb.save(output_path)
     print(f"Excel 結果已儲存：{output_path}")
 
-def is_need_more_photos(result_json):
-    """
-    判斷 GPT 是否建議補拍。
-    """
-    need_more = result_json.get("need_more_photos", {})
-    suggest = need_more.get("建議補拍", False)
-
-    if suggest == True:
-        return True
-
-    if isinstance(suggest, str):
-        suggest = suggest.strip().lower()
-        if suggest in ["true", "yes", "是", "需要", "建議補拍"]:
-            return True
-
-    return False
-
-def print_resupply_suggestion(result_json, group_name):
-    """
-    印出 GPT 建議補拍的原因、角度與重點。
-    """
-    need_more = result_json.get("need_more_photos", {})
-
-    print("\n" + "!" * 60)
-    print(f"{group_name}：GPT 建議補拍照片")
-    print("原因：", need_more.get("原因", "未提供原因"))
-
-    angles = need_more.get("建議補拍角度", [])
-    if angles:
-        print("建議補拍角度：")
-        if isinstance(angles, list):
-            for angle in angles:
-                print("  -", angle)
-        else:
-            print("  -", angles)
-
-    print("補拍重點：", need_more.get("補拍重點", "未提供補拍重點"))
-    print("!" * 60)
-
 def process_one_group(group_folder):
     """
     處理單一 group 資料夾。
-    如果 GPT 建議補拍，使用者可以把新照片放進同一個 group，
-    然後程式重新讀取所有照片並再次盤點。
+    每個 group 只執行一次盤點，不包含補拍或重新盤點迴圈。
     """
     group_name = os.path.basename(group_folder)
 
@@ -493,97 +452,66 @@ def process_one_group(group_folder):
     if not os.path.exists(RESULT_FOLDER):
         os.makedirs(RESULT_FOLDER)
 
-    round_number = 1
+    # 讀取目前 group 內所有圖片
+    all_images = get_image_files(group_folder)
 
-    while True:
-        print("\n" + "-" * 60)
-        print(f"{group_name}：第 {round_number} 輪盤點")
-        print("-" * 60)
+    scene_images = []
+    for img in all_images:
+        filename = os.path.basename(img)
 
-        # 每一輪都重新讀取圖片，這樣補拍後的新照片才會被讀到
-        all_images = get_image_files(group_folder)
+        # 排除 reference.jpg 和 overview.jpg，兩者都不列為一般場景圖片
+        if filename != REFERENCE_IMAGE_NAME and filename != OVERVIEW_IMAGE_NAME:
+            scene_images.append(img)
 
-        scene_images = []
-        for img in all_images:
-            filename = os.path.basename(img)
+    if len(scene_images) == 0:
+        print(f"提醒：{group_name} 裡沒有找到場景圖片，跳過此組。")
+        return
 
-            # 排除 reference.jpg 和 overview.jpg，兩者都不列為一般場景圖片
-            if filename != REFERENCE_IMAGE_NAME and filename != OVERVIEW_IMAGE_NAME:
-                scene_images.append(img)
+    print(f"找到 {len(scene_images)} 張場景圖片：")
+    for img in scene_images:
+        print(f"  - {os.path.basename(img)}")
 
-        if len(scene_images) == 0:
-            print(f"提醒：{group_name} 裡沒有找到場景圖片，跳過此組。")
-            return
+    # 單次呼叫 ChatGPT 進行盤點
+    result_text = call_chatgpt(
+        scene_images,
+        reference_image_path,
+        group_name,
+        overview_image_path
+    )
 
-        print(f"找到 {len(scene_images)} 張場景圖片：")
-        for img in scene_images:
-            print(f"  - {os.path.basename(img)}")
+    print("ChatGPT 回傳的原始結果：")
+    print("-" * 50)
+    print(result_text)
+    print("-" * 50)
 
-        result_text = call_chatgpt(scene_images, reference_image_path, group_name, overview_image_path)
+    clean_text = clean_json_text(result_text)
 
-        print("ChatGPT 回傳的原始結果：")
-        print("-" * 50)
-        print(result_text)
-        print("-" * 50)
+    try:
+        result_json = json.loads(clean_text)
+        print("\nJSON 解析成功！")
+    except json.JSONDecodeError as e:
+        print(f"\n警告：{group_name} 回傳內容不是合法 JSON：{e}")
+        print("請檢查上方原始回傳內容。")
+        return
 
-        clean_text = clean_json_text(result_text)
+    # 直接儲存此組最終結果
+    final_output_filename = f"inventory_result_{group_name}_final.json"
+    final_output_path = os.path.join(RESULT_FOLDER, final_output_filename)
+    save_json(result_json, final_output_path)
 
-        try:
-            result_json = json.loads(clean_text)
-            print("\nJSON 解析成功！")
-        except json.JSONDecodeError as e:
-            print(f"\n警告：{group_name} 第 {round_number} 輪回傳內容不是合法 JSON：{e}")
-            print("請檢查上方原始回傳內容。")
-            return
+    print_table(result_json)
 
-        round_output_filename = f"inventory_result_{group_name}_round_{round_number}.json"
-        round_output_path = os.path.join(RESULT_FOLDER, round_output_filename)
+    final_excel_filename = f"inventory_result_{group_name}_final.xlsx"
+    final_excel_path = os.path.join(RESULT_FOLDER, final_excel_filename)
+    save_excel(result_json, final_excel_path)
 
-        save_json(result_json, round_output_path)
-        print_table(result_json)
-
-        if not is_need_more_photos(result_json):
-            print(f"\n{group_name}：GPT 判斷目前照片足夠，不需要補拍。")
-
-            final_output_filename = f"inventory_result_{group_name}_final.json"
-            final_output_path = os.path.join(RESULT_FOLDER, final_output_filename)
-
-            save_json(result_json, final_output_path)
-
-            final_excel_filename = f"inventory_result_{group_name}_final.xlsx"
-            final_excel_path = os.path.join(RESULT_FOLDER, final_excel_filename)
-
-            save_excel(result_json, final_excel_path)
-
-            print(f"\n{group_name} 最終 JSON 結果已輸出：{final_output_path}")
-            print(f"{group_name} 最終 Excel 結果已輸出：{final_excel_path}")
-            break
-
-        print_resupply_suggestion(result_json, group_name)
-
-        if round_number >= MAX_RESUPPLY_ROUNDS:
-            print(f"\n{group_name} 已達到最多補拍重跑次數：{MAX_RESUPPLY_ROUNDS}")
-            print("程式停止此 group 的補拍流程，請先檢查目前結果。")
-            break
-
-        print(f"\n請將補拍照片放入這個資料夾：")
-        print(group_folder)
-
-        user_input = input("放好後輸入 y 重新盤點；輸入 n 跳過此 group：").strip().lower()
-
-        if user_input == "y":
-            round_number += 1
-            print("\n重新讀取照片並再次盤點...")
-            continue
-        else:
-            print(f"\n你選擇不繼續補拍，{group_name} 停在第 {round_number} 輪結果。")
-            break
-
+    print(f"\n{group_name} 最終 JSON 結果已輸出：{final_output_path}")
+    print(f"{group_name} 最終 Excel 結果已輸出：{final_excel_path}")
     print(f"\n{group_name} 處理完成！")
 
 def print_table(inventory_data):
     """
-    印出盤點結果，以及是否建議補拍。
+    印出盤點結果與整體備註。
     """
     items = inventory_data.get("inventory", [])
 
@@ -604,34 +532,6 @@ def print_table(inventory_data):
             print(f"{name:<12} | {str(count):<8} | {note}")
 
     print("=" * 80)
-
-    # --- 補拍判斷結果 ---
-    need_more = inventory_data.get("need_more_photos", {})
-
-    print("\n是否建議補拍")
-    print("-" * 80)
-
-    if not need_more:
-        print("GPT 沒有回傳 need_more_photos 欄位。")
-        return
-
-    suggest = need_more.get("建議補拍", False)
-    reason = need_more.get("原因", "")
-    angles = need_more.get("建議補拍角度", [])
-    focus = need_more.get("補拍重點", "")
-
-    print("建議補拍：", suggest)
-    print("原因：", reason)
-
-    if angles:
-        print("建議補拍角度：")
-        if isinstance(angles, list):
-            for angle in angles:
-                print("  -", angle)
-        else:
-            print("  -", angles)
-
-    print("補拍重點：", focus)
 
     overall = inventory_data.get("overall_note", "")
     if overall:
